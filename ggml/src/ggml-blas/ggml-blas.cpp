@@ -24,7 +24,7 @@ enum CBLAS_TRANSPOSE {
 };
 
 // Use the same software floating point implementation as the Cartesi Machine
-//typedef uint32_t float32_t;
+typedef uint32_t float32_t;
 static float32_t f32_add(float32_t a, float32_t b) {
     uint32_t fflags;
     return cartesi::i_sfloat32::add(a, b, FRM_RNE, &fflags);
@@ -46,8 +46,6 @@ static float32_t i32_to_f32(int32_t a) {
 }
 
 
-int omp_get_thread_num(void);
-
 void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE TransB,
                  const int M, const int N, const int K,
                  const float alpha, const float *A, const int lda,
@@ -58,12 +56,11 @@ void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE
         printf("Only row major supported\n");
         return;
     }
-    printf("sgemm(%i,%i,%i)\n", M, N, K);
-    float32_t float_sum_pre_calc = i32_to_f32(0);
-    #pragma omp parallel for collapse(2)
+//    printf("sgemm(%i,%i,%i)\n", M, N, K);
+    const float32_t float_sum_pre_calc = i32_to_f32(0);
+    #pragma omp parallel for
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
-            printf("%i\n", omp_get_thread_num);
             float32_t sum = float_sum_pre_calc;
             
             for (int k = 0; k < K; k++) {
@@ -474,7 +471,6 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
 
         case GGML_OP_MUL_MAT:
         {
-            return true;
             const struct ggml_tensor * src0 = op->src[0];
             const struct ggml_tensor * src1 = op->src[1];
 
@@ -485,16 +481,15 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
 
             // TODO: find the optimal value
             const int64_t min_batch = 32;
-
+           // printf("(%i,%i) %i\n", src0->type, src1->type, ggml_get_type_traits(src0->type)->to_float != NULL);
             return ggml_is_contiguous(src0) &&
                    ggml_is_contiguous(src1) &&
                    src1->type == GGML_TYPE_F32 &&
-                   (ne0 >= min_batch && ne1 >= min_batch && ne10 >= min_batch) &&
+                   /* (ne0 >= min_batch && ne1 >= min_batch && ne10 >= min_batch) && */
                    (src0->type == GGML_TYPE_F32 || ggml_get_type_traits(src0->type)->to_float != NULL);
         }
 
         case GGML_OP_OUT_PROD:
-            return true;
             return op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[1]->type == GGML_TYPE_F32 &&
                    ggml_is_matrix(src0) &&
