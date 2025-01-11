@@ -25,44 +25,41 @@ enum CBLAS_TRANSPOSE {
 
 // Use the same software floating point implementation as the Cartesi Machine
 typedef uint32_t float32_t;
-static float32_t f32_add(float32_t a, float32_t b) {
+static float32_t inline f32_add(float32_t a, float32_t b) {
     uint32_t fflags;
     return cartesi::i_sfloat32::add(a, b, FRM_RNE, &fflags);
 }
 
-static float32_t f32_mul(float32_t a, float32_t b) {
+static float32_t inline f32_mul(float32_t a, float32_t b) {
     uint32_t fflags;
     return cartesi::i_sfloat32::mul(a, b, FRM_RNE, &fflags);
 }
 
-static float32_t f32_fma(float32_t a, float32_t b, float32_t c) {
+static float32_t inline f32_fma(float32_t a, float32_t b, float32_t c) {
     uint32_t fflags;
     return cartesi::i_sfloat32::fma(a, b, c, FRM_RNE, &fflags);
 }
 
-static float32_t i32_to_f32(int32_t a) {
+static float32_t inline i32_to_f32(int32_t a) {
     uint32_t fflags;
     return cartesi::i_sfloat32::cvt_i_f<int32_t>(a, FRM_RNE, &fflags);
 }
 
 
-void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE TransB,
+
+ __attribute__((hot)) void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE TransB,
                  const int M, const int N, const int K,
                  const float alpha, const float *A, const int lda,
                  const float *B, const int ldb,
                  const float beta, float *C, const int ldc) {
 
-    if (layout != CblasRowMajor) {
-        printf("Only row major supported\n");
-        return;
-    }
-   // printf("sgemm(%i,%i,%i)\n", M, N, K);
     const float32_t float_sum_pre_calc = i32_to_f32(0);
+    const float32_t alpha_f32 = *(float32_t*)&alpha;
+    const float32_t beta_f32 = *(float32_t*)&beta;
     for (int i = 0; i < M; i++) {
         #pragma omp parallel for
         for (int j = 0; j < N; j++) {
             float32_t sum = float_sum_pre_calc;
-            
             for (int k = 0; k < K; k++) {
                 // Calculate indices based on transpose flags
                 int a_idx = (TransA == CblasNoTrans) ? 
@@ -77,8 +74,42 @@ void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE
             }
 
             // Scale by alpha and add beta*C
-            float32_t alpha_f32 = *(float32_t*)&alpha;
-            float32_t beta_f32 = *(float32_t*)&beta;
+            float32_t c_val = *(float32_t*)&C[i * ldc + j];
+            float32_t result = f32_fma(alpha_f32, sum, f32_mul(beta_f32, c_val));
+            
+            // Store result
+            C[i * ldc + j] = *(float*)&result;
+        }
+    }
+}
+
+__attribute__((hot)) void softfloat_sgemm_matmul(CBLAS_ORDER layout,
+                 const int M, const int N, const int K,
+                 const float alpha, const float *A, const int lda,
+                 const float *B, const int ldb,
+                 const float beta, float *C, const int ldc) {
+
+    const float32_t float_sum_pre_calc = i32_to_f32(0);
+    const float32_t alpha_f32 = *(float32_t*)&alpha;
+    const float32_t beta_f32 = *(float32_t*)&beta;
+    for (int i = 0; i < M; i++) {
+        #pragma omp parallel for
+        for (int j = 0; j < N; j++) {
+            float32_t sum = float_sum_pre_calc;
+            
+            for (int k = 0; k < K; k++) {
+                // Calculate indices based on transpose flags
+                int a_idx = 
+                    i * lda + k;
+                int b_idx = j * ldb + k;
+                // Convert inputs to float32_t
+                float32_t a_val = *(float32_t*)&A[a_idx];
+                float32_t b_val = *(float32_t*)&B[b_idx];
+                // Multiply and accumulate using FMA
+                sum = f32_fma(a_val, b_val, sum);
+            }
+
+            // Scale by alpha and add beta*C
             float32_t c_val = *(float32_t*)&C[i * ldc + j];
             
             float32_t result = f32_fma(alpha_f32, sum, f32_mul(beta_f32, c_val));
@@ -211,7 +242,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                 x = (float *) wdata + i02*ne_plane + i03*ne02*ne_plane;
             }
 
-            softfloat_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+            softfloat_sgemm_matmul(CblasRowMajor,
                         ne1, ne01, ne10,
                         1.0f,   y, ne10,
                                 x, ne00,
