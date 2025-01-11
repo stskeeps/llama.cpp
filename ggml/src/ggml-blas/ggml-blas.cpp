@@ -56,10 +56,10 @@ void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE
         printf("Only row major supported\n");
         return;
     }
-//    printf("sgemm(%i,%i,%i)\n", M, N, K);
+   // printf("sgemm(%i,%i,%i)\n", M, N, K);
     const float32_t float_sum_pre_calc = i32_to_f32(0);
-    #pragma omp parallel for
     for (int i = 0; i < M; i++) {
+        #pragma omp parallel for
         for (int j = 0; j < N; j++) {
             float32_t sum = float_sum_pre_calc;
             
@@ -69,11 +69,9 @@ void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE
                     i * lda + k : k * lda + i;
                 int b_idx = (TransB == CblasNoTrans) ?
                     k * ldb + j : j * ldb + k;
-
                 // Convert inputs to float32_t
                 float32_t a_val = *(float32_t*)&A[a_idx];
                 float32_t b_val = *(float32_t*)&B[b_idx];
-                
                 // Multiply and accumulate using FMA
                 sum = f32_fma(a_val, b_val, sum);
             }
