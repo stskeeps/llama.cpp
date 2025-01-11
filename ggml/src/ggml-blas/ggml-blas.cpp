@@ -5,18 +5,94 @@
 #include <future>
 #include <vector>
 #include <cstring>
+#include <omp.h>
 
-#if defined(GGML_BLAS_USE_ACCELERATE)
-#   include <Accelerate/Accelerate.h>
-#elif defined(GGML_BLAS_USE_MKL)
-#   include <mkl.h>
-#elif defined(GGML_BLAS_USE_BLIS)
-#   include <blis.h>
-#elif defined(GGML_BLAS_USE_NVPL)
-#   include <nvpl_blas.h>
-#else
-#   include <cblas.h>
-#endif
+#define GGML_BLAS_USE_SOFTFLOAT
+#   include "soft-float.h"
+
+
+// Define CBLAS enums since we're not including cblas.h
+enum CBLAS_ORDER {
+    CblasRowMajor = 101,
+    CblasColMajor = 102
+};
+
+enum CBLAS_TRANSPOSE {
+    CblasNoTrans = 111,
+    CblasTrans = 112,
+    CblasConjTrans = 113
+};
+
+// Use the same software floating point implementation as the Cartesi Machine
+//typedef uint32_t float32_t;
+static float32_t f32_add(float32_t a, float32_t b) {
+    uint32_t fflags;
+    return cartesi::i_sfloat32::add(a, b, FRM_RNE, &fflags);
+}
+
+static float32_t f32_mul(float32_t a, float32_t b) {
+    uint32_t fflags;
+    return cartesi::i_sfloat32::mul(a, b, FRM_RNE, &fflags);
+}
+
+static float32_t f32_fma(float32_t a, float32_t b, float32_t c) {
+    uint32_t fflags;
+    return cartesi::i_sfloat32::fma(a, b, c, FRM_RNE, &fflags);
+}
+
+static float32_t i32_to_f32(int32_t a) {
+    uint32_t fflags;
+    return cartesi::i_sfloat32::cvt_i_f<int32_t>(a, FRM_RNE, &fflags);
+}
+
+
+int omp_get_thread_num(void);
+
+void softfloat_sgemm(CBLAS_ORDER layout, CBLAS_TRANSPOSE TransA, CBLAS_TRANSPOSE TransB,
+                 const int M, const int N, const int K,
+                 const float alpha, const float *A, const int lda,
+                 const float *B, const int ldb,
+                 const float beta, float *C, const int ldc) {
+
+    if (layout != CblasRowMajor) {
+        printf("Only row major supported\n");
+        return;
+    }
+    printf("sgemm(%i,%i,%i)\n", M, N, K);
+    float32_t float_sum_pre_calc = i32_to_f32(0);
+    #pragma omp parallel for collapse(2)
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("%i\n", omp_get_thread_num);
+            float32_t sum = float_sum_pre_calc;
+            
+            for (int k = 0; k < K; k++) {
+                // Calculate indices based on transpose flags
+                int a_idx = (TransA == CblasNoTrans) ? 
+                    i * lda + k : k * lda + i;
+                int b_idx = (TransB == CblasNoTrans) ?
+                    k * ldb + j : j * ldb + k;
+
+                // Convert inputs to float32_t
+                float32_t a_val = *(float32_t*)&A[a_idx];
+                float32_t b_val = *(float32_t*)&B[b_idx];
+                
+                // Multiply and accumulate using FMA
+                sum = f32_fma(a_val, b_val, sum);
+            }
+
+            // Scale by alpha and add beta*C
+            float32_t alpha_f32 = *(float32_t*)&alpha;
+            float32_t beta_f32 = *(float32_t*)&beta;
+            float32_t c_val = *(float32_t*)&C[i * ldc + j];
+            
+            float32_t result = f32_fma(alpha_f32, sum, f32_mul(beta_f32, c_val));
+            
+            // Store result
+            C[i * ldc + j] = *(float*)&result;
+        }
+    }
+}
 
 struct ggml_backend_blas_context {
     int n_threads = GGML_DEFAULT_N_THREADS;
@@ -140,7 +216,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
                 x = (float *) wdata + i02*ne_plane + i03*ne02*ne_plane;
             }
 
-            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+            softfloat_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                         ne1, ne01, ne10,
                         1.0f,   y, ne10,
                                 x, ne00,
@@ -190,7 +266,7 @@ static void ggml_backend_blas_out_prod(ggml_backend_blas_context * ctx, struct g
     int k = src0->ne[1];
     int m = src1->ne[0];
 
-    CBLAS_TRANSPOSE transposeA;
+    enum CBLAS_TRANSPOSE transposeA;
     int lda;
 
     if (!ggml_is_transposed(src1)) {
@@ -205,7 +281,7 @@ static void ggml_backend_blas_out_prod(ggml_backend_blas_context * ctx, struct g
     float * b = (float *) ((char *) src0->data);
     float * c = (float *) ((char *) dst->data);
 
-    cblas_sgemm(CblasRowMajor, transposeA, CblasNoTrans, m, n, k, 1.0, a, lda, b, n, 0.0, c, n);
+    softfloat_sgemm(CblasRowMajor, transposeA, CblasNoTrans, m, n, k, 1.0, a, lda, b, n, 0.0, c, n);
 
     GGML_UNUSED(ctx);
 }
@@ -279,7 +355,7 @@ static ggml_guid_t ggml_backend_blas_guid(void) {
 
 ggml_backend_t ggml_backend_blas_init(void) {
     ggml_backend_blas_context * ctx = new ggml_backend_blas_context;
-
+    printf("registered blas\n");
     ggml_backend_t backend = new ggml_backend {
         /* .guid      = */ ggml_backend_blas_guid(),
         /* .interface = */ blas_backend_i,
@@ -398,7 +474,7 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
 
         case GGML_OP_MUL_MAT:
         {
-            // BLAS usually is only faster for large matrices
+            return true;
             const struct ggml_tensor * src0 = op->src[0];
             const struct ggml_tensor * src1 = op->src[1];
 
@@ -418,6 +494,7 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
         }
 
         case GGML_OP_OUT_PROD:
+            return true;
             return op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[1]->type == GGML_TYPE_F32 &&
                    ggml_is_matrix(src0) &&
