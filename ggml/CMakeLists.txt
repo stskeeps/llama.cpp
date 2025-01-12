@@ -139,6 +139,7 @@ option(GGML_BLAS                            "ggml: use BLAS"                    
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
+option(GGML_CARTESI                         "ggml: use Cartesi software floating point"       OFF)
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
@@ -237,6 +238,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-backend.h
     include/ggml-blas.h
     include/ggml-cann.h
+    include/ggml-cartesi.h
     include/ggml-cuda.h
     include/ggml-kompute.h
     include/ggml-opt.h

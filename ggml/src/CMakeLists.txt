@@ -338,3 +338,6 @@ if (BUILD_SHARED_LIBS)
         target_compile_definitions(${target} PUBLIC  GGML_SHARED)
     endforeach()
 endif()
+
+# add backend subdirectories
+ggml_add_backend(CARTESI)
